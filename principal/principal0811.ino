@@ -19,7 +19,7 @@ const int PINTRANS = 9;
 // we define all the variables as int and float, but we can switch to double later in order to occupy less memory
 int midnight = -1; // it is 0 if it isn't midnight and 1 if it is
 float watch = -1; // variable that knows what time it is
-bool wifi = false; // it is 0 if the wifi doesn't work and 1 if it works    #modify in bool
+bool wifi = false; // it is 0 if the wifi doesn't work and 1 if it works 
 float array_prices [24];
 int start_hour_best = -1; // it is the best hour suggested by the device
 float average_price = -1;
@@ -37,7 +37,6 @@ void Start_Average (void);
 void device_settings (void);
 void getTime(void);
 bool getWifiStatus(bool);
-
 
 
 /*
