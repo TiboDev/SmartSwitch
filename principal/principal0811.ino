@@ -6,14 +6,24 @@
 #include <Process.h>
 #include <YunClient.h>
 #include <YunServer.h>
-
-# include <math.h>
+#include <math.h>
+#include <SPI.h>
+#include "principal.h"
 
 const int PINRED = 11;
 const int PINBLUE = 12;
 const int PINGREEN = 13;
 const int PINTRANS = 9;
-//const int PINBUTTON = ;
+
+const int SHIPSELECT = 10;
+
+/*
+ * 3 states:
+ * 0 inactive
+ * INCREASE
+ * DECREASE
+ */
+unsigned char potentiometer_state = 0;
 
 // we define all the variables as int and float, but we can switch to double later in order to occupy less memory
 int midnight = -1; // it is 0 if it isn't midnight and 1 if it is
@@ -27,9 +37,16 @@ float desired_duration = -1; // duration of the charging set by the user
 float time_passed = -1; // variable that counts the time starting from the beginning of the charging
 bool flag = false;         //variable to catch if charging process has started
 // int start_charging = -1; // it is 1 when the user decide to start charging, 0 otherwise
-bool plugged = false; // it is 0 if nothing is plugged and 1 if something is. This value comes from the current sensor, that activates an INPUT pin (so actually we won't need this variable)
+bool plugged = true; // it is 0 if nothing is plugged and 1 if something is. This value comes from the current sensor, that activates an INPUT pin (so actually we won't need this variable)
 
+bool config_screen = false;
+bool information_screen = false;
 bool start = true;
+bool end_screen = false;
+bool buttonIsPressed = false;
+bool process_screen = false;
+
+int start_time = 0;
 
 /*
  * Part to get the synchronize time
@@ -37,7 +54,32 @@ bool start = true;
 
 Process date;
 int hours = -1, minutes = -1, seconds = -1;
-int lastSecond = 0;
+int lastSecond = 0, lastMinute = 0, lastHour = 0;
+
+/*
+ * Function to send message to Arduino board
+ *
+ * WARNING the value to send has to be max 255 !
+ */
+void printScreen(unsigned char sendCode, unsigned int toSend)
+{
+  // enable Slave Select
+  digitalWrite(10, LOW);    // SS is pin 10
+  digitalWrite(13, HIGH);
+
+  // send test string
+  SPI.transfer (sendCode);
+  SPI.transfer (toSend);
+
+  SPI.transfer ('\n');
+
+  // disable Slave Select
+  digitalWrite(10, HIGH);
+
+  delay (300); 
+  digitalWrite(13, LOW);
+  delay (150);
+}
 
 /*
  * Refresh the time -should work
@@ -58,23 +100,24 @@ void getTime(bool Display)
         String hourString = timeString.substring(0, firstColon);
         String minString = timeString.substring(firstColon + 1, secondColon);
         String secString = timeString.substring(secondColon + 1);
+        lastSecond = seconds;
+        lastMinute = minutes;
+        lastHour = hours;
         hours = hourString.toInt();
         minutes = minString.toInt();
-        lastSecond = seconds;
         seconds = secString.toInt();
+
+        if (Display)
+        {
+          if (lastHour != hours)
+            printScreen(UART_HOUR, hours);
+          if (lastMinute != minutes)
+            printScreen(UART_MINUTE, minutes);
+          if (lastSecond != seconds)
+            printScreen(UART_SECOND, seconds);
+        }
       }
     }
-  }
-
-  if (Display)
-  {
-    Serial.print("Time: ");
-    Serial.print(hours);
-    Serial.print(":");
-    Serial.print(minutes);
-    Serial.print(":");
-    Serial.println(seconds);
-    Serial.println();
   }
 }
 
@@ -113,7 +156,7 @@ void httpClient()
   String host = "slsoptimizationservice.cloudapp.net";
   IPAddress server(104, 45, 93, 96); // or number format IPAddress server(XX,XX,XX,XX)
   String path = "/json/reply/OptimizeProducer";
-  String body = "{\"producer\":{\"maximumPower\":[1,1,1,1,1,1,1,1,0],\"minimumPower\":0}, \"source\":{\"initialLevel\":0,\"maximumLevel\":0,\"minimumLevel\":0,\"finalLevel\":0}, \"storage\":{\"initialLevel\":0.5,\"finalLevel\":1,\"minimumLevel\":0,\"maximumLevel\":1}, \"deviceID\":\"deviceID\"}";           // String representation of JSON body
+  String body = "{\"producer\":{\"maximumPower\":[1,1,1,1,1,1,1,1,0],\"minimumPower\":0}, \"source\":{\"initialLevel\":0,\"maximumLevel\":0,\"minimumLevel\":0,\"finalLevel\":0}, \"storage\":{\"initialLevel\":0.5,\"finalLevel\":1,\"minimumLevel\":0,\"maximumLevel\":1}, \"deviceID\":\"tcFYbMlB7O5NlijlhZQK0neMmwW9gARvowitomosS0U%3d\"}";           // String representation of JSON body
 
   if (client.connect(server, 80)) {
     Serial.println("connected");
@@ -145,8 +188,9 @@ void device_settings ()
     digitalWrite (PINRED, HIGH);
     digitalWrite (PINGREEN, HIGH);
     Serial.print ("ERROR: The WIFI is not locked");
-    while (!(wifi = getWifiStatus()));
-    Serial.print ("Now the wifi is working!"); // the alternative is to understand how to delete messages from the screen
+    while (!(wifi = getWifiStatus(false)))
+      getTime(false);
+    //Serial.print ("Now the wifi is working!"); // the alternative is to understand how to delete messages from the screen
     digitalWrite (PINRED, LOW);
     digitalWrite (PINGREEN, LOW);
   }
@@ -167,6 +211,17 @@ void setup() {
 
   Serial.println("Starting bridge and serial ...\n");
 
+  pinMode(10, OUTPUT);
+  digitalWrite(SHIPSELECT, HIGH);  // ensure SS stays high for now
+
+  // Put SCK, MOSI, SS pins into output mode
+  // also put SCK, MOSI into LOW state, and SS into HIGH state.
+  // Then put SPI hardware into Master mode and turn SPI on
+  SPI.begin ();
+
+  // Slow down the master a bit
+  SPI.setClockDivider(SPI_CLOCK_DIV8);
+
   //initialize pin
   pinMode (PINRED, OUTPUT);
   pinMode (PINGREEN, OUTPUT);
@@ -179,6 +234,8 @@ void setup() {
     date.addParameter("+%T");
     date.run();
   }
+
+  Serial.println("endInit");
 }
 
 // Function that finds the best hour to start charging and the average price
@@ -245,9 +302,9 @@ void loop() {
     if (!wifi) { // check the wifi only when the device downloads the prices, not for charging!
       digitalWrite (PINRED, HIGH);
       digitalWrite (PINGREEN, HIGH);
-      Serial.println ("ERROR: The WIFI is not locked");
-      while (!(wifi = getWifiStatus(false)))
-        getTime(false);
+      //Serial.println ("ERROR: The WIFI is not locked");
+      /*while (!(wifi = getWifiStatus(false)))
+        getTime(false);*/
       Serial.println ("Now the wifi is working!"); // the alternative is to understand how to delete messages from the screen
       digitalWrite (PINRED, LOW);
       digitalWrite (PINGREEN, LOW);
@@ -261,7 +318,118 @@ void loop() {
     // FUNCTION that calculates the average price
     Serial.println ("Average price: ");
     Serial.println (average_price);
+    printScreen(UART_MENU_TYPE, MENU_TYPE_START); //display the starting screen
     start = false;
+    config_screen = false;
+  }
+
+  /*
+   * First screen where the user configure the duration time
+   */
+  if (config_screen)
+  {
+    desired_duration = 0;
+    while (!buttonIsPressed)
+    {
+      if (potentiometer_state == INCREASE)
+      {
+        if (desired_duration < 254)
+        {
+          desired_duration++;
+          potentiometer_state == 0;
+          printScreen(UART_CONFIG_DURATION, desired_duration);
+        }
+      }
+      else
+      {
+        if (potentiometer_state == DECREASE)
+        {
+          if (desired_duration > 0)
+          {
+            desired_duration--;
+            potentiometer_state == 0;
+            printScreen(UART_CONFIG_DURATION, desired_duration);
+          }
+        }
+      }
+    }
+    config_screen = false;
+    information_screen = true;
+  }
+
+  /*
+   * screen that display information about the best hour, the average price
+   * user has to agree on charging
+   */
+  if (information_screen)
+  {
+    bool Cursor = true;
+    printScreen(UART_MENU_TYPE, MENU_TYPE_BEST_HOUR);
+    printScreen(UART_AVERAGE_PRICE, average_price);
+    printScreen(UART_CHARGING_DURATION, desired_duration);
+    while (!buttonIsPressed)
+    {
+      if (potentiometer_state == DECREASE)
+      {
+        printScreen(UART_CURSOR_SCREEN, CURSOR_OK);
+        Cursor = true;
+      }
+      else
+      {
+        if (potentiometer_state == INCREASE)
+        {
+          printScreen(UART_CURSOR_SCREEN, CURSOR_RETURN);
+          Cursor = false;
+        }
+      }
+    }
+
+    information_screen = false;
+    if (Cursor)
+      process_screen = true;
+    else
+      config_screen = true;
+  }
+
+  if (process_screen)
+  {
+    process_screen = false;
+    printScreen(UART_MENU_TYPE, MENU_TYPE_PROCESS);
+
+    printScreen(UART_END_TIME, (int)(desired_duration + start_hour_best) % 24);
+    printScreen(UART_START_TIME, start_hour_best);
+
+    while (flag)
+    {
+      //diaplay the remaining time
+      printScreen(UART_REMAINING_TIME, ((hours * 60 + minutes) - start_time + desired_duration) > 0 ? ((hours * 60 + minutes) - start_time + desired_duration) : desired_duration);
+    }
+
+    end_screen = true;
+  }
+
+  if (end_screen)
+  {
+    bool Cursor = true;
+    end_screen = false;
+    printScreen(UART_MENU_TYPE, MENU_TYPE_END);
+
+    while (!buttonIsPressed)
+    {
+      if (potentiometer_state == DECREASE)
+      {
+        printScreen(UART_CURSOR_SCREEN, CURSOR_OK);
+        Cursor = true;
+      }
+      else
+      {
+        if (potentiometer_state == INCREASE)
+        {
+          printScreen(UART_CURSOR_SCREEN, CURSOR_RETURN);
+          Cursor = false;
+        }
+      }
+    }
   }
 
   if (!plugged) {
@@ -276,7 +444,7 @@ void loop() {
 
   //#I do not understand why is it for ?
   // you are doing the same thing in both conditions
-  if (watch == start_hour)
+  if (watch == start_hour_best)
   {
     digitalWrite (PINTRANS, HIGH);
     flag = false;
@@ -288,7 +456,7 @@ void loop() {
 
     if (desired_duration == time_passed) {
       digitalWrite (PINTRANS, LOW);
-      Serial.println ("Charging finished");
+      //Serial.println ("Charging finished");
       digitalWrite (PINRED, HIGH);
       digitalWrite (PINGREEN, HIGH);
       digitalWrite (PINBLUE, HIGH);
@@ -301,8 +469,7 @@ void loop() {
     }
   }
 
-  httpClient();
+  //httpClient();
   getTime(true);
-
-  delay(1000);
+  printScreen(UART_WIFI_STATUS, getWifiStatus(false));
 }
