@@ -1,3 +1,4 @@
+// ALICE ultima modifica 23/11
 #include <Bridge.h>
 #include <Console.h>
 #include <FileIO.h>
@@ -8,6 +9,7 @@
 #include <YunServer.h>
 #include <math.h>
 #include <SPI.h>
+#include "time.h"
 #include "principal.h"
 
 const int PINRED = 11;
@@ -26,18 +28,20 @@ const int SHIPSELECT = 10;
 unsigned char potentiometer_state = 0;
 
 // we define all the variables as int and float, but we can switch to double later in order to occupy less memory
-int midnight = -1; // it is 0 if it isn't midnight and 1 if it is
+int hourupdate = -1; // it is 0 if it isn't 2pm and 1 if it is
 float watch = -1; // variable that knows what time it is
 bool wifi = false; // it is 0 if the wifi doesn't work and 1 if it works    #modify in bool
-float array_prices [24];
+float array_prices [34]; // array with 34 elements, because every 2pm we get the prices from 2pm to midnight of the following day
 int start_hour_best = -1; // it is the best hour suggested by the device
-float average_price = -1;
+float average_price = -1; // average price estimated considering the best hours for charging the device (euros/hour)
 float start_hour_user = -1; // the user can decide to start chargin in a different moment from the one suggested
-float desired_duration = -1; // duration of the charging set by the user
+float desired_duration = -1; // duration of the charging set by the user, time that the device needs to be charged
 float time_passed = -1; // variable that counts the time starting from the beginning of the charging
 bool flag = false;         //variable to catch if charging process has started
 // int start_charging = -1; // it is 1 when the user decide to start charging, 0 otherwise
-bool plugged = true; // it is 0 if nothing is plugged and 1 if something is. This value comes from the current sensor, that activates an INPUT pin (so actually we won't need this variable)
+int plugged = -1; // it is 0 if nothing is plugged and 1 if something is. This value comes from the current sensor, that activates an INPUT pin (so actually we won't need this variable)
+
+unsigned char programStat = STAT_START;
 
 bool config_screen = false;
 bool information_screen = false;
@@ -48,13 +52,13 @@ bool process_screen = false;
 
 int start_time = 0;
 
+CTime timeCustom;
+
 /*
  * Part to get the synchronize time
  */
 
 Process date;
-int hours = -1, minutes = -1, seconds = -1;
-int lastSecond = 0, lastMinute = 0, lastHour = 0;
 
 /*
  * Function to send message to Arduino board
@@ -76,7 +80,7 @@ void printScreen(unsigned char sendCode, unsigned int toSend)
   // disable Slave Select
   digitalWrite(10, HIGH);
 
-  delay (300); 
+  delay (300);
   digitalWrite(13, LOW);
   delay (150);
 }
@@ -86,7 +90,7 @@ void printScreen(unsigned char sendCode, unsigned int toSend)
  */
 void getTime(bool Display)
 {
-  if (lastSecond != seconds) {
+  if (timeCustom.secondChanged()) {
     if (!date.running())  {
       date.begin("date");
       date.addParameter("+%T");
@@ -100,24 +104,54 @@ void getTime(bool Display)
         String hourString = timeString.substring(0, firstColon);
         String minString = timeString.substring(firstColon + 1, secondColon);
         String secString = timeString.substring(secondColon + 1);
-        lastSecond = seconds;
-        lastMinute = minutes;
-        lastHour = hours;
-        hours = hourString.toInt();
-        minutes = minString.toInt();
-        seconds = secString.toInt();
+
+        timeCustom.setHour(hourString.toInt());
+        timeCustom.setMinute(minString.toInt());
+        timeCustom.setSecond(secString.toInt());
 
         if (Display)
         {
-          if (lastHour != hours)
-            printScreen(UART_HOUR, hours);
-          if (lastMinute != minutes)
-            printScreen(UART_MINUTE, minutes);
-          if (lastSecond != seconds)
-            printScreen(UART_SECOND, seconds);
+          printScreen(UART_SECOND, timeCustom.getSecond());
+          if (timeCustom.hourChanged())
+            printScreen(UART_HOUR, timeCustom.getHour());
+          if (timeCustom.minuteChanged())
+            printScreen(UART_MINUTE, timeCustom.getMinute());
         }
       }
     }
+  }
+}
+
+/*
+ * Control LED
+ */
+
+void setLED(unsigned char R, unsigned char G, unsigned char B)
+{
+  analogWrite(PINRED, R);
+  analogWrite(PINGREEN, G);
+  analogWrite(PINBLUE, B);
+}
+
+void setLED(unsigned char color)
+{
+  switch (color)
+  {
+    case RED:
+      setLED(254, 0, 0);
+      break;
+    case GREEN:
+      setLED(0, 254, 0);
+      break;
+    case BLUE:
+      setLED(0, 0, 254);
+      break;
+    case WHITE:
+      setLED(254, 254, 254);
+      break;
+    case BLACK:
+        setLED(0, 0, 0);
+      break;
   }
 }
 
@@ -138,7 +172,7 @@ bool getWifiStatus(bool Display)
   }
 
   //if hours are still equal to -1 it means Wifi is not locked
-  if (hours >= 0)
+  if (timeCustom.isTimeSet())
     return true;
   else
     return false;
@@ -181,18 +215,15 @@ void httpClient()
 }
 
 // Function that checks the wifi, gets the prices, display the best hour to start and the average price
-// ATT : Is it possible to call a function in other function???
 void device_settings ()
 {
   if (!wifi) { // check the wifi only when the device downloads the prices, not for charging!
-    digitalWrite (PINRED, HIGH);
-    digitalWrite (PINGREEN, HIGH);
+    setLED(YELLOW);
     Serial.print ("ERROR: The WIFI is not locked");
     while (!(wifi = getWifiStatus(false)))
       getTime(false);
     //Serial.print ("Now the wifi is working!"); // the alternative is to understand how to delete messages from the screen
-    digitalWrite (PINRED, LOW);
-    digitalWrite (PINGREEN, LOW);
+    setLED(BLACK);
   }
   // refresh array_prices with new prices (overwrite the array each day)
 
@@ -203,6 +234,12 @@ void device_settings ()
   Serial.print (start_hour_best);
   Serial.print ("Average price: ");
   Serial.print (average_price);
+}
+
+void routine()
+{
+  getTime(true);
+  printScreen(UART_WIFI_STATUS, getWifiStatus(false));
 }
 
 void setup() {
@@ -241,205 +278,176 @@ void setup() {
 // Function that finds the best hour to start charging and the average price
 void Start_Average ()
 {
-  /* This is the Matlab code that we used to verify the functionality of this function. This code must be traslated in the right language for Arduino
-  sum = 0;
-  sum_best = -1;
-  sum_old = -1;
-  start_best_hour = -1;
-  average_price = -1;
-  charging_duration = 3;
-  array_prices = [4,1,5,3,4,5,6,5,54,4,15,1,2,1,5,5,76,6,63,2,7,5,3,3];
+  float sum = 0;
+  float sum_best = -1;
+  float sum_old = -1;
 
-  for i = 1 : (24-(charging_duration)+1)
+  for (int i = 1; i = 34 - desired_duration + 1; i++) {
     sum_old = sum;
     sum = 0;
-    for y = 1:(charging_duration)
-        sum = sum + array_prices (i+y-1);
-    end
-
-
-    if i == 1
+    for (int y = 1; y = desired_duration; y++) {
+      sum = sum + array_prices[i + y - 1];
+    }
+    if (i == 1) {
+      sum_best = sum;
+    }
+    else {
+      if (sum < sum_best) {
+        start_hour_best = i;
         sum_best = sum;
-    end
-
-    if i ~= 1
-       if (sum < sum_best)
-           start_best_hour = i;
-           sum_best = sum;
-
-       end
-    end
-
-  end
-    average_price = sum_best/charging_duration;
-
-
-  */
+      }
+    }
+  }
+  average_price = sum_best / desired_duration;
 }
 
-/* syntax for Arduino but the code is not correct
- int i = -1;
- int y = -1;
- int sum = 0;
- int sum_best = -1;
- int sum_old = -1;
- for (i = 0; i < 24 - charging_duration + 1; i++) {
-   sum_old = sum;
-   for (y = 0; y < charging_duration; y++ ) {
-     sum = sum + array_prices [i + y];
-   }
-   if (sum < sum_old) {
-     start_hour_best = i;
-     sum_best = sum;
-   }
- }
- average_price = sum_best / charging_duration;
-
-}*/
 
 void loop() {
-  if (start) {
-    if (!wifi) { // check the wifi only when the device downloads the prices, not for charging!
-      digitalWrite (PINRED, HIGH);
-      digitalWrite (PINGREEN, HIGH);
-      //Serial.println ("ERROR: The WIFI is not locked");
-      /*while (!(wifi = getWifiStatus(false)))
-        getTime(false);*/
-      Serial.println ("Now the wifi is working!"); // the alternative is to understand how to delete messages from the screen
-      digitalWrite (PINRED, LOW);
-      digitalWrite (PINGREEN, LOW);
-    }
-    // refresh array_prices with new prices (overwrite the array each day)
 
-    // FUNCTION that displays the best our to start, so the user can decide to switch the device off and switch it on again when the time is close to the best hour
-    Serial.println ("Best hour to start: ");
-    Serial.println (start_hour_best);
-
-    // FUNCTION that calculates the average price
-    Serial.println ("Average price: ");
-    Serial.println (average_price);
-    printScreen(UART_MENU_TYPE, MENU_TYPE_START); //display the starting screen
-    start = false;
-    config_screen = false;
-  }
-
-  /*
-   * First screen where the user configure the duration time
-   */
-  if (config_screen)
+  switch (programStat)
   {
-    desired_duration = 0;
-    while (!buttonIsPressed)
-    {
-      if (potentiometer_state == INCREASE)
-      {
-        if (desired_duration < 254)
-        {
-          desired_duration++;
-          potentiometer_state == 0;
-          printScreen(UART_CONFIG_DURATION, desired_duration);
-        }
+    case STAT_START:
+      if (!wifi) { // check the wifi only when the device downloads the prices, not for charging!
+        setLED(YELLOW);
+        //Serial.println ("ERROR: The WIFI is not locked");
+        /*while (!(wifi = getWifiStatus(false)))
+          getTime(false);*/
+        Serial.println ("Now the wifi is working!"); // the alternative is to understand how to delete messages from the screen
+        setLED(BLACK);
       }
-      else
+      // refresh array_prices with new prices (overwrite the array each day)
+
+      // FUNCTION that displays the best our to start, so the user can decide to switch the device off and switch it on again when the time is close to the best hour
+      Serial.println ("Best hour to start: ");
+      Serial.println (start_hour_best);
+
+      // FUNCTION that calculates the average price
+      Serial.println ("Average price: ");
+      Serial.println (average_price);
+      printScreen(UART_MENU_TYPE, MENU_TYPE_START); //display the starting screen
+      start = false;
+      config_screen = false;
+      break;
+
+    /*
+    * First screen where the user configure the duration time
+    */
+    case STAT_CONFIG:
+      desired_duration = 0;
+      while (!buttonIsPressed)
       {
-        if (potentiometer_state == DECREASE)
+        if (potentiometer_state == INCREASE)
         {
-          if (desired_duration > 0)
+          if (desired_duration < 254)
           {
-            desired_duration--;
+            desired_duration++;
             potentiometer_state == 0;
             printScreen(UART_CONFIG_DURATION, desired_duration);
           }
         }
-      }
-    }
-    config_screen = false;
-    information_screen = true;
-  }
-
-  /*
-   * screen that display information about the best hour, the average price
-   * user has to agree on charging
-   */
-  if (information_screen)
-  {
-    bool Cursor = true;
-    printScreen(UART_MENU_TYPE, MENU_TYPE_BEST_HOUR);
-    printScreen(UART_AVERAGE_PRICE, average_price);
-    printScreen(UART_CHARGING_DURATION, desired_duration);
-    while (!buttonIsPressed)
-    {
-      if (potentiometer_state == DECREASE)
-      {
-        printScreen(UART_CURSOR_SCREEN, CURSOR_OK);
-        Cursor = true;
-      }
-      else
-      {
-        if (potentiometer_state == INCREASE)
+        else
         {
-          printScreen(UART_CURSOR_SCREEN, CURSOR_RETURN);
-          Cursor = false;
+          if (potentiometer_state == DECREASE)
+          {
+            if (desired_duration > 0)
+            {
+              desired_duration--;
+              potentiometer_state == 0;
+              printScreen(UART_CONFIG_DURATION, desired_duration);
+            }
+          }
         }
       }
-    }
+      config_screen = false;
+      information_screen = true;
+      break;
 
-    information_screen = false;
-    if (Cursor)
-      process_screen = true;
-    else
-      config_screen = true;
-  }
-
-  if (process_screen)
-  {
-    process_screen = false;
-    printScreen(UART_MENU_TYPE, MENU_TYPE_PROCESS);
-
-    printScreen(UART_END_TIME, (int)(desired_duration + start_hour_best) % 24);
-    printScreen(UART_START_TIME, start_hour_best);
-
-    while (flag)
-    {
-      //diaplay the remaining time
-      printScreen(UART_REMAINING_TIME, ((hours * 60 + minutes) - start_time + desired_duration) > 0 ? ((hours * 60 + minutes) - start_time + desired_duration) : desired_duration);
-    }
-
-    end_screen = true;
-  }
-
-  if (end_screen)
-  {
-    bool Cursor = true;
-    end_screen = false;
-    printScreen(UART_MENU_TYPE, MENU_TYPE_END);
-
-    while (!buttonIsPressed)
-    {
-      if (potentiometer_state == DECREASE)
+    /*
+    * screen that display information about the best hour, the average price
+    * user has to agree on charging
+    */
+    case STAT_INFORMATION:
+      bool Cursor = true;
+      printScreen(UART_MENU_TYPE, MENU_TYPE_BEST_HOUR);
+      printScreen(UART_AVERAGE_PRICE, average_price);
+      printScreen(UART_CHARGING_DURATION, desired_duration);
+      while (!buttonIsPressed)
       {
-        printScreen(UART_CURSOR_SCREEN, CURSOR_OK);
-        Cursor = true;
-      }
-      else
-      {
-        if (potentiometer_state == INCREASE)
+        if (potentiometer_state == DECREASE)
         {
-          printScreen(UART_CURSOR_SCREEN, CURSOR_RETURN);
-          Cursor = false;
+          printScreen(UART_CURSOR_SCREEN, CURSOR_OK);
+          Cursor = true;
+        }
+        else
+        {
+          if (potentiometer_state == INCREASE)
+          {
+            printScreen(UART_CURSOR_SCREEN, CURSOR_RETURN);
+            Cursor = false;
+          }
         }
       }
-    }
-  }
 
+      information_screen = false;
+      if (Cursor)
+        process_screen = true;
+      else
+        config_screen = true;
+      break;
+
+    /*
+     * The car is charging
+     */
+    case STAT_PROCESS:
+      process_screen = false;
+      printScreen(UART_MENU_TYPE, MENU_TYPE_PROCESS);
+
+      printScreen(UART_END_TIME, (int)(desired_duration + start_hour_best) % 24);
+      printScreen(UART_START_TIME, start_hour_best);
+
+      while (flag)
+      {
+        //diaplay the remaining time
+        int remainingTime = (timeCustom.getHour() * 60 + timeCustom.getMinute()) - start_time + desired_duration;
+        printScreen(UART_REMAINING_TIME, remainingTime > 0 ? remainingTime : desired_duration);
+      }
+
+      end_screen = true;
+      break;
+
+    /*
+     * Process terminated
+     */
+    case STAT_END:
+      bool Cursor = true;
+      end_screen = false;
+      printScreen(UART_MENU_TYPE, MENU_TYPE_END);
+
+      while (!buttonIsPressed)
+      {
+        if (potentiometer_state == DECREASE)
+        {
+          printScreen(UART_CURSOR_SCREEN, CURSOR_OK);
+          Cursor = true;
+        }
+        else
+        {
+          if (potentiometer_state == INCREASE)
+          {
+            printScreen(UART_CURSOR_SCREEN, CURSOR_RETURN);
+            Cursor = false;
+          }
+        }
+      }
+      break;
+  }
+// ALICE Are all the serial print still useful? Some of them are already written above..
   if (!plugged) {
-    digitalWrite (PINRED, HIGH);
-    digitalWrite (PINGREEN, HIGH);
+    setLED (YELLOW);
     Serial.println ("ERROR: Nothing is plugged, plug it ...");
     while (!plugged);
     Serial.println ("Now you have plugged a device!"); // the alternative is to understand how to delete messages from the screen
-    digitalWrite (PINRED, LOW);
-    digitalWrite (PINGREEN, LOW);
+    setLED(BLACK);
   }
 
   //#I do not understand why is it for ?
@@ -457,9 +465,7 @@ void loop() {
     if (desired_duration == time_passed) {
       digitalWrite (PINTRANS, LOW);
       //Serial.println ("Charging finished");
-      digitalWrite (PINRED, HIGH);
-      digitalWrite (PINGREEN, HIGH);
-      digitalWrite (PINBLUE, HIGH);
+      setLED(WHITE); // ALICE when do we have to switch off this LEDs?
       start_hour_user = -1;
       start_hour_best = -1;
       desired_duration = -1;
@@ -468,8 +474,4 @@ void loop() {
       start = true; //to restart checking price
     }
   }
-
-  //httpClient();
-  getTime(true);
-  printScreen(UART_WIFI_STATUS, getWifiStatus(false));
 }

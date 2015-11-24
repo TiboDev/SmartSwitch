@@ -35,3 +35,18 @@
 /* potentiometer */
 #define DECREASE           50
 #define INCREASE           51
+
+/* stat of the program */
+#define STAT_START        52
+#define STAT_CONFIG       53
+#define STAT_INFORMATION  54
+#define STAT_PROCESS      55
+#define STAT_END          56
+
+/* LED */
+#define RED               60
+#define GREEN             61
+#define BLUE              62
+#define ORANGE            63
+#define WHITE             64
+#define BLACK             65
