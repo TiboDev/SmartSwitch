@@ -11,20 +11,19 @@
 #include <SPI.h>
 #include "time.h"
 #include "principal.h"
+#include "Rotary_Encoder.h"
 
-const int PINRED = 11;
-const int PINBLUE = 12;
-const int PINGREEN = 13;
+const int PINRED = 5;
+const int PINBLUE = 6;
+const int PINGREEN = 7;
 const int PINTRANS = 9;
 
-const int SHIPSELECT = 10;
-
 /*
- * 3 states:
- * 0 inactive
- * INCREASE
- * DECREASE
- */
+   3 states:
+   0 inactive
+   INCREASE
+   DECREASE
+*/
 unsigned char potentiometer_state = 0;
 
 // we define all the variables as int and float, but we can switch to double later in order to occupy less memory
@@ -53,69 +52,65 @@ bool process_screen = false;
 int start_time = 0;
 
 CTime timeCustom;
+CRotaryEncoder encoder;
 
 /*
- * Part to get the synchronize time
- */
+   Part to get the synchronize time
+*/
 
 Process date;
 
 /*
- * Function to send message to Arduino board
- *
- * WARNING the value to send has to be max 255 !
- */
+   Function to send message to Arduino board
+
+   WARNING the value to send has to be max 255 !
+*/
 void printScreen(unsigned char sendCode, unsigned int toSend)
 {
-  // enable Slave Select
-  digitalWrite(10, LOW);    // SS is pin 10
-  digitalWrite(13, HIGH);
+  Serial.print("Send SPI code : ");
+  Serial.print(sendCode);
+  Serial.print(" data : ");
+  Serial.println(toSend);
 
   // send test string
   SPI.transfer (sendCode);
-  SPI.transfer (toSend);
-
-  SPI.transfer ('\n');
-
-  // disable Slave Select
-  digitalWrite(10, HIGH);
-
-  delay (300);
-  digitalWrite(13, LOW);
-  delay (150);
+  delay(100);
+  SPI.transfer ((unsigned int)toSend);
+  delay(100);
+  SPI.transfer (254);
+  delay(100);
 }
 
 /*
- * Refresh the time -should work
- */
+   Refresh the time -should work
+*/
 void getTime(bool Display)
 {
-  if (timeCustom.secondChanged()) {
-    if (!date.running())  {
-      date.begin("date");
-      date.addParameter("+%T");
-      date.run();
+  if (!date.running())  {
+    date.begin("date");
+    date.addParameter("+%T");
+    date.run();
 
-      if (date.available() > 0) {
-        String timeString = date.readString();
+    if (date.available() > 0) {
+      String timeString = date.readString();
 
-        int firstColon = timeString.indexOf(":");
-        int secondColon = timeString.lastIndexOf(":");
-        String hourString = timeString.substring(0, firstColon);
-        String minString = timeString.substring(firstColon + 1, secondColon);
-        String secString = timeString.substring(secondColon + 1);
+      int firstColon = timeString.indexOf(":");
+      int secondColon = timeString.lastIndexOf(":");
+      String hourString = timeString.substring(0, firstColon);
+      String minString = timeString.substring(firstColon + 1, secondColon);
+      String secString = timeString.substring(secondColon + 1);
 
-        timeCustom.setHour(hourString.toInt());
-        timeCustom.setMinute(minString.toInt());
-        timeCustom.setSecond(secString.toInt());
+      timeCustom.setHour(hourString.toInt());
+      timeCustom.setMinute(minString.toInt());
+      timeCustom.setSecond(secString.toInt());
 
-        if (Display)
+      if (Display)
+      {
+        printScreen(UART_SECOND, timeCustom.getSecond());
+        if (timeCustom.minuteChanged())
         {
-          printScreen(UART_SECOND, timeCustom.getSecond());
-          if (timeCustom.hourChanged())
-            printScreen(UART_HOUR, timeCustom.getHour());
-          if (timeCustom.minuteChanged())
-            printScreen(UART_MINUTE, timeCustom.getMinute());
+          printScreen(UART_HOUR, timeCustom.getHour());
+          printScreen(UART_MINUTE, timeCustom.getMinute());
         }
       }
     }
@@ -123,41 +118,46 @@ void getTime(bool Display)
 }
 
 /*
- * Control LED
- */
+   Control LED
+*/
 
 void setLED(unsigned char R, unsigned char G, unsigned char B)
 {
-  analogWrite(PINRED, R);
-  analogWrite(PINGREEN, G);
-  analogWrite(PINBLUE, B);
+  digitalWrite(PINRED, R);
+  digitalWrite(PINGREEN, G);
+  digitalWrite(PINBLUE, B);
 }
 
 void setLED(unsigned char color)
 {
+  Serial.print("Switch on light : ");
+  Serial.println(color, DEC);
   switch (color)
   {
     case RED:
-      setLED(254, 0, 0);
+      setLED(HIGH, LOW, LOW);
       break;
     case GREEN:
-      setLED(0, 254, 0);
+      setLED(LOW, HIGH, LOW);
       break;
     case BLUE:
-      setLED(0, 0, 254);
+      setLED(LOW, LOW, HIGH);
+      break;
+    case YELLOW:
+      setLED(HIGH, HIGH, LOW);
       break;
     case WHITE:
-      setLED(254, 254, 254);
+      setLED(HIGH, HIGH, HIGH);
       break;
-    case BLACK:
-        setLED(0, 0, 0);
+    case NONE:
+      setLED(LOW, LOW, LOW);
       break;
   }
 }
 
 /*
- * Process of Wifi
- */
+   Process of Wifi
+*/
 bool getWifiStatus(bool Display)
 {
   if (Display)
@@ -179,8 +179,8 @@ bool getWifiStatus(bool Display)
 }
 
 /*
- * Function HTTP
- */
+   Function HTTP
+*/
 
 void httpClient()
 {
@@ -223,7 +223,7 @@ void device_settings ()
     while (!(wifi = getWifiStatus(false)))
       getTime(false);
     //Serial.print ("Now the wifi is working!"); // the alternative is to understand how to delete messages from the screen
-    setLED(BLACK);
+    setLED(NONE);
   }
   // refresh array_prices with new prices (overwrite the array each day)
 
@@ -244,12 +244,12 @@ void routine()
 
 void setup() {
   Serial.begin(9600);   //Initialize serial connection
-  Bridge.begin();       //initialize the bridge with linux part
-
   Serial.println("Starting bridge and serial ...\n");
 
-  pinMode(10, OUTPUT);
-  digitalWrite(SHIPSELECT, HIGH);  // ensure SS stays high for now
+  delay(1000);
+
+  Bridge.begin();       //initialize the bridge with linux part
+
 
   // Put SCK, MOSI, SS pins into output mode
   // also put SCK, MOSI into LOW state, and SS into HIGH state.
@@ -263,6 +263,11 @@ void setup() {
   pinMode (PINRED, OUTPUT);
   pinMode (PINGREEN, OUTPUT);
   pinMode (PINBLUE, OUTPUT);
+  pinMode (RESET_ARDUINO_PIN, OUTPUT);
+
+  //reset arduino board
+  digitalWrite(RESET_ARDUINO_PIN, LOW);
+
   // pinMode (PINBUTTON, INPUT);
 
   //Run an initial process to get the time
@@ -271,6 +276,9 @@ void setup() {
     date.addParameter("+%T");
     date.run();
   }
+
+  //reset arduino board
+  digitalWrite(RESET_ARDUINO_PIN, HIGH);
 
   Serial.println("endInit");
 }
@@ -303,17 +311,21 @@ void Start_Average ()
 
 
 void loop() {
+  bool Cursor = false;
 
   switch (programStat)
   {
     case STAT_START:
+      printScreen(UART_MENU_TYPE, MENU_TYPE_START); //display the starting screen
       if (!wifi) { // check the wifi only when the device downloads the prices, not for charging!
+        routine();
+        Serial.println("switch on light");
         setLED(YELLOW);
-        //Serial.println ("ERROR: The WIFI is not locked");
+        Serial.println ("ERROR: The WIFI is not locked");
         /*while (!(wifi = getWifiStatus(false)))
           getTime(false);*/
         Serial.println ("Now the wifi is working!"); // the alternative is to understand how to delete messages from the screen
-        setLED(BLACK);
+        setLED(NONE);
       }
       // refresh array_prices with new prices (overwrite the array each day)
 
@@ -324,18 +336,19 @@ void loop() {
       // FUNCTION that calculates the average price
       Serial.println ("Average price: ");
       Serial.println (average_price);
-      printScreen(UART_MENU_TYPE, MENU_TYPE_START); //display the starting screen
-      start = false;
-      config_screen = false;
+      programStat = STAT_CONFIG;
       break;
 
     /*
-    * First screen where the user configure the duration time
+      First screen where the user configure the duration time
     */
     case STAT_CONFIG:
+      Serial.println("Config screen");
       desired_duration = 0;
+      printScreen(UART_MENU_TYPE, MENU_TYPE_BEST_HOUR); //display the starting screen
       while (!buttonIsPressed)
       {
+        routine();
         if (potentiometer_state == INCREASE)
         {
           if (desired_duration < 254)
@@ -358,21 +371,22 @@ void loop() {
           }
         }
       }
-      config_screen = false;
-      information_screen = true;
+      programStat = STAT_INFORMATION;
       break;
 
     /*
-    * screen that display information about the best hour, the average price
-    * user has to agree on charging
+      screen that display information about the best hour, the average price
+      user has to agree on charging
     */
     case STAT_INFORMATION:
-      bool Cursor = true;
+      Serial.println("Info screen");
+      Cursor = true;
       printScreen(UART_MENU_TYPE, MENU_TYPE_BEST_HOUR);
       printScreen(UART_AVERAGE_PRICE, average_price);
       printScreen(UART_CHARGING_DURATION, desired_duration);
       while (!buttonIsPressed)
       {
+        routine();
         if (potentiometer_state == DECREASE)
         {
           printScreen(UART_CURSOR_SCREEN, CURSOR_OK);
@@ -390,15 +404,16 @@ void loop() {
 
       information_screen = false;
       if (Cursor)
-        process_screen = true;
+        programStat = STAT_PROCESS;
       else
-        config_screen = true;
+        programStat = STAT_CONFIG;
       break;
 
     /*
-     * The car is charging
-     */
+       The car is charging
+    */
     case STAT_PROCESS:
+      Serial.println("Progress screen");
       process_screen = false;
       printScreen(UART_MENU_TYPE, MENU_TYPE_PROCESS);
 
@@ -407,24 +422,27 @@ void loop() {
 
       while (flag)
       {
+        routine();
         //diaplay the remaining time
         int remainingTime = (timeCustom.getHour() * 60 + timeCustom.getMinute()) - start_time + desired_duration;
         printScreen(UART_REMAINING_TIME, remainingTime > 0 ? remainingTime : desired_duration);
       }
 
-      end_screen = true;
+      programStat = STAT_END;
       break;
 
     /*
-     * Process terminated
-     */
+       Process terminated
+    */
     case STAT_END:
-      bool Cursor = true;
+      Serial.println("End screen");
+      Cursor = true;
       end_screen = false;
       printScreen(UART_MENU_TYPE, MENU_TYPE_END);
 
       while (!buttonIsPressed)
       {
+        routine();
         if (potentiometer_state == DECREASE)
         {
           printScreen(UART_CURSOR_SCREEN, CURSOR_OK);
@@ -441,13 +459,13 @@ void loop() {
       }
       break;
   }
-// ALICE Are all the serial print still useful? Some of them are already written above..
+  // ALICE Are all the serial print still useful? Some of them are already written above..
   if (!plugged) {
     setLED (YELLOW);
     Serial.println ("ERROR: Nothing is plugged, plug it ...");
     while (!plugged);
     Serial.println ("Now you have plugged a device!"); // the alternative is to understand how to delete messages from the screen
-    setLED(BLACK);
+    setLED(NONE);
   }
 
   //#I do not understand why is it for ?
