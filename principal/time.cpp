@@ -22,26 +22,26 @@ int CTime::getSecond() const
 
 bool CTime::hourChanged()
 {
-	if(hour != lastHour)
-		return true;
-	else
-		return false;
+  if(hour != lastHour)
+    return true;
+  else
+    return false;
 }
 
 bool CTime::minuteChanged()
 {
-	if(minute != lastMinute)
-		return true;
-	else
-		return false;
+  if(minute != lastMinute)
+    return true;
+  else
+    return false;
 }
 
 bool CTime::secondChanged()
 {
-	if(second != lastSecond)
-		return true;
-	else
-		return false;
+  if(second != lastSecond)
+    return true;
+  else
+    return false;
 }
 
 void CTime::setHour(int hourArg)
@@ -64,8 +64,9 @@ void CTime::setSecond(int secondArg)
 
 bool CTime::isTimeSet()
 {
-	if(hour != 0 && minute != 0 && second != 0)
-		return true;
-	else
-		return false;
+  if(hour != 0 && minute != 0 && second != 0)
+    return true;
+  else
+    return false;
 }
+
